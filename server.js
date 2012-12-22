@@ -9,7 +9,7 @@ if(process.env.VCAP_SERVICES){
     var env = JSON.parse(process.env.VCAP_SERVICES);
     var cred = env['mysql-5.1'][0]['credentials'];
 
-    process.env['db'] = "mysql://" + cred['username'] + ":" + cred['password'] + "@" + cred['host'] + "/pingpong"; 
+    process.env['db'] = "mysql://" + cred['username'] + ":" + cred['password'] + "@" + cred['host'] + "/" + cred['name']; 
 }
 
 orm.connect( process.env['db'], function(err, db){
