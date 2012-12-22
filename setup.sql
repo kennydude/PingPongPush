@@ -1,5 +1,5 @@
-CREATE DATABASE IF NOT EXISTS `pingpong`
-USE `pingpong`
+CREATE DATABASE IF NOT EXISTS `pingpong`;
+USE `pingpong`;
 
 --
 -- Table structure for table `user`
