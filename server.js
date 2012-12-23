@@ -124,17 +124,18 @@ orm.connect( process.env['db'], function(err, db){
 						gcm : req.body['gcm']
 					});
 					me.save(function(err, me){
+						console.log(err);
 						if(!err){
 							pong_2(me, req, res);
 						} else{
-							res.end("error");
+							res.status(503).end("error");
 						}
 					});
 				}
 			});
 		} catch(e){
 			console.log(e);
-			res.end("error");
+			res.status(503).end("error");
 		}
 	});
 
