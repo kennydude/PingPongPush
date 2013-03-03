@@ -8,8 +8,7 @@
     },
 	"dependencies" : {
 		"express" : ">=3.x.x",
-		"orm" : "https://github.com/kennydude/node-orm2/tarball/master",
-		"mysql" : "2.0.0-alpha4",
-		"node-gcm" : ">=0.0.1"
+		"mongodb" : "*",
+		"superagent" : ">=0.0.1"
 	}
 }

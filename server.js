@@ -1,30 +1,46 @@
-var express = require("express"),
-	gcm = require('node-gcm'),
-	orm = require("orm");
-
-var authKey = process.env['key'],
-	sender = new gcm.Sender(authKey);
+var	express = require("express"),
+	mongodb = require("mongodb");
 
 if(process.env.VCAP_SERVICES){
     var env = JSON.parse(process.env.VCAP_SERVICES);
-    var cred = env['mysql-5.1'][0]['credentials'];
+    var mongo = env['mongodb-1.8'][0]['credentials'];
+} else{
+    var mongo = {
+        "hostname":"localhost",
+        "port":27017,
+        "username":"",
+        "password":"",
+        "name":"",
+        "db":"pingpong"
+    }
+} // TODO: Add other 1 click cloud stuff here
 
-    process.env['db'] = "mysql://" + cred['username'] + ":" + cred['password'] + "@" + cred['host'] + "/" + cred['name']; 
+var generate_mongo_url = function(obj){
+    obj.hostname = (obj.hostname || 'localhost');
+    obj.port = (obj.port || 27017);
+    obj.db = (obj.db || 'test');
+    if(obj.username && obj.password){
+        return "mongodb://" + obj.username + ":" + obj.password + "@" + obj.hostname + ":" + obj.port + "/" + obj.db;
+    }
+    else{
+        return "mongodb://" + obj.hostname + ":" + obj.port + "/" + obj.db;
+    }
 }
+var mongourl = generate_mongo_url(mongo);
 
-orm.connect( process.env['db'], function(err, db){
+var	authKey = process.env['key'],
+	request = require("superagent");
+
+mongodb.connect( mongourl, function(err, db){
 	if(err){
 		throw new Error("Failure connecting to db: " + err);
 	}
-
-	var user = db.define("user", {
-		"gcm" : String
+	db.collection("user", function(err, coll){
+		if(coll == null){
+			console.log("Collection does not exist");
+			db.createCollection("user");
+		}
 	});
-
-	var tag = db.define("user_tag", {
-		"tag" : String
-	});
-	tag.hasOne("user", user);
 
 	app = express();
 
@@ -38,45 +54,50 @@ orm.connect( process.env['db'], function(err, db){
 	});
 
 	function ping(data, offset){
-		user.find({
-			"tag" : data['tags'].split(",")
-		}, {
-			"__merge" : {
-				"from" : {
-					"table" : "user_tag",
-					"field" : "user_id"
-				},
-				"to" : {
-					"table" : "user",
-					"field" : "id"
-				}
-			},
-			"limit" : 1000,
-			"offset" : offset
-		}, function(err, results){
+		db.collection("user").find({
+			"tags" : { "$in" : data['tags'].split(",") },
+			"push_type" : "google"
+		}, { "limit" : 100, "skip" : offset }).toArray(function(err, results){
+			console.log(results.length);
+			
 			if(err){ console.log(err); }
 			else if(results.length > 0){
-
-				// send push
-				message = new gcm.Message();
-				for(k in data){
-					message.addData(k, data[k]);
-				}
-
 				ids = [];
 				results.forEach(function(device){
-					ids.push(device.gcm);
+					//console.log(device['push_token']);
+					ids.push(device['push_token']);
 				});
+				console.log("Sending push to " + ids.length + " google devices");
 
-				sender.send(message, ids, 3, function(result){
-					// TODO: Handle failure
-					console.log(result);
-
-					if(results.length > 900){
-						ping(data, offset + 1000);
-					}
+				request	.post("https://android.googleapis.com/gcm/send")
+					.set('Content-Type', 'application/json')
+					.set('Authorization', 'key=' + authKey)
+					.send({ "registration_ids" : ids, "data" : data })
+					.end(function(err, res){
+						if(err){ console.log("Error: " + err); }
+						try{
+							if(res.body['results']){
+								for(var i = 0; i < res.body['results'].length; i++){
+									var result = res.body['results'][i];
+									if(result['message_id']){
+										if(ids[ i ] != result['registration_id'] ){
+											results[i].gcm = result['registration_id'];
+											results[i].save();
+											console.log("Reg ID has changed");
+										}
+									} else if(result['error']){
+										console.log("Messaged failed");
+										if(result['error'] == "NotRegistered"){
+											results[i].remove(); console.log("Device gone and removed from our DB");
+										}
+									}
+								}
+							}
+						} catch(e){ console.log(e); }
+						if(results.length > 100){
+							ping(data, offset + 100);
+						}
 				});
-
 			}
 		});
 	}
@@ -87,51 +108,32 @@ orm.connect( process.env['db'], function(err, db){
 
 		ping(req.body, 0);
 	});
-
-	// Once we get the user class, we can save the tags
-	function pong_2(me, req, res){
-		// now remove old tags
-		db.driver.remove("user_tag", {"user_id" : me.id}, function(){
-
-			// register new ones
-			var t = req.body['tags'].split(",");
-			console.log(t);
-			t.forEach(function(ta){
-				console.log(ta);
-				x = new tag({
-					"user_id" : me.id,
-					tag : ta
-				});
-				x.save(function(err){
-					console.log(err);
-				});
-			});
-
-			res.end("ok");
-
-		});
-	}
-
+	
 	app.post("/pong/register", function(req, res){
 		// Register a pong
 		try{
-			user.find({"gcm" : req.body['gcm']}, function(err, results){
-				if(results.length > 0){
-					me = results[0];
-					pong_2(me, req, res);
+			db.collection("user").findOne({
+				"push_type" : req.body['type'] || "google",
+				"push_token" : req.body['gcm']
+			}, function(err, item){
+				if(item == null){
+					item = {};
+					func = "insert";
 				} else{
-					me = new user({
-						gcm : req.body['gcm']
-					});
-					me.save(function(err, me){
-						console.log(err);
-						if(!err){
-							pong_2(me, req, res);
-						} else{
-							res.status(503).end("error");
-						}
-					});
+					func = "update";
 				}
+				
+				item["push_type"] = req.body['type'] || "google";
+				item["push_token"] = req.body['gcm'];
+				item["tags"] = req.body['tags'].split(",");
+				
+				db.collection("user")[func](item, function(err, result){
+					if(!err){
+						res.end("ok");
+					} else{
+						res.status(503).end("ERROR");
+					}
+				});
 			});
 		} catch(e){
 			console.log(e);
